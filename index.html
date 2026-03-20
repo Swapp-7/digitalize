@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DIGITALIZE // IMAGE PROCESSOR</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div class="app-container">
+
+    <!-- ═══════════════ LAYER PANEL (left) ═══════════════ -->
+    <aside class="layer-sidebar">
+      <div class="layer-sidebar__header">
+        <h1 class="sidebar-title">DIGIT<span class="blink">_</span>ALIZE</h1>
+        <p class="sidebar-subtitle">CLIENT-SIDE IMAGE PROCESSOR</p>
+        <div class="sidebar-divider">━━━━━━━━━━━━━━━━━━━━</div>
+      </div>
+      <div class="layer-sidebar__body">
+        <div id="layer-panel"></div>
+      </div>
+    </aside>
+
+    <!-- ═══════════════ CANVAS PANEL ═══════════════ -->
+    <main class="canvas-panel">
+      <div class="panel-header">
+        <span class="panel-label">// VIEWPORT</span>
+        <div class="canvas-actions">
+          <button id="btn-undo" class="btn btn--ghost" disabled>↩ UNDO</button>
+          <button id="btn-export" class="btn btn--primary" disabled>⬇ EXPORT.PNG</button>
+        </div>
+      </div>
+
+      <div id="drop-zone" class="drop-zone">
+        <canvas id="main-canvas"></canvas>
+        <div class="drop-hint" id="drop-hint">
+          <div class="drop-hint__icon">▒▒▒</div>
+          <p class="drop-hint__text">DROP IMAGE HERE</p>
+          <p class="drop-hint__sub">or</p>
+          <button id="btn-open" class="btn btn--accent">[ OPEN FILE ]</button>
+          <p class="drop-hint__formats">PNG · JPG · WEBP · GIF</p>
+        </div>
+      </div>
+
+      <div class="canvas-info" id="canvas-info"></div>
+    </main>
+
+    <!-- ═══════════════ STACK SIDEBAR (right) ═══════════════ -->
+    <aside class="sidebar">
+      <div class="sidebar-body" id="sidebar-body">
+        <p class="no-image-msg" id="no-image-msg">
+          &gt; AWAITING INPUT...<span class="blink">█</span>
+        </p>
+
+        <!-- Stack controls injected here by ui.js once image is loaded -->
+        <div id="controls-container" class="controls-container hidden">
+          <div class="stack-section-label hidden" id="stack-section-label">
+            // MODIFIERS — <span id="active-layer-name">—</span>
+          </div>
+          <div id="stack-container"></div>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Hidden file input -->
+  <input type="file" id="file-input" accept="image/*" hidden />
+
+  <script src="filters.js"></script>
+  <script src="layers.js"></script>
+  <script src="store.js"></script>
+  <script src="fabric-bridge.js"></script>
+  <script src="ui.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
