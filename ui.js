@@ -12,6 +12,11 @@
 
 'use strict';
 
+function debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
 const noImageMsg        = document.getElementById('no-image-msg');
 const controlsContainer = document.getElementById('controls-container');
 
@@ -134,8 +139,7 @@ function _buildStackItem(item, index, layerId) {
   `;
   if (def.reroll) {
     header.querySelector('.stack-item__reroll').addEventListener('click', () => {
-      // Re-run randomized filter without changing state
-      FabricBridge.invalidateLayer(layerId);
+      Store.dispatch({ type: 'UPDATE_MODIFIER_VALUE', layerId, modifierId: item.id, key: 'seed', value: Math.floor(Math.random() * 65536) });
     });
   }
   header.querySelector('.stack-item__remove').addEventListener('click', () => {
@@ -219,9 +223,12 @@ function _buildControl(ctrl, item, layerId) {
     const valEl = wrapper.querySelector('.filter-value');
     input.addEventListener('input', () => {
       const val = parseFloat(input.value);
-      valEl.textContent = input.value;                     // direct DOM update (no re-render)
+      valEl.textContent = input.value;
       App.updateSliderFill(input);
-      Store.dispatch({ type: 'UPDATE_MODIFIER_VALUE', layerId, modifierId: item.id, key: ctrl.id, value: val });
+      Store.dispatch({ type: 'UPDATE_MODIFIER_VALUE', layerId, modifierId: item.id, key: ctrl.id, value: val, _transient: true });
+    });
+    input.addEventListener('pointerup', () => {
+      Store.dispatch({ type: 'UPDATE_MODIFIER_VALUE', layerId, modifierId: item.id, key: ctrl.id, value: parseFloat(input.value) });
     });
     requestAnimationFrame(() => App.updateSliderFill(input));
 
@@ -409,8 +416,11 @@ function _buildLayerRow(layer, isActive) {
   requestAnimationFrame(() => App.updateSliderFill(opSlider));
 
   opSlider.addEventListener('input', () => {
-    opVal.textContent = opSlider.value + '%';           // direct DOM update
+    opVal.textContent = opSlider.value + '%';
     App.updateSliderFill(opSlider);
+    Store.dispatch({ type: 'SET_LAYER_PROP', id: layer.id, prop: 'opacity', value: opSlider.value / 100, _transient: true });
+  });
+  opSlider.addEventListener('pointerup', () => {
     Store.dispatch({ type: 'SET_LAYER_PROP', id: layer.id, prop: 'opacity', value: opSlider.value / 100 });
   });
 

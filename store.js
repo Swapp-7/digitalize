@@ -79,11 +79,16 @@ function _reduce(state, action) {
       copy.locked    = src.locked;
       copy.x         = src.x;
       copy.y         = src.y;
-      copy.modifiers = src.modifiers.map(m => ({ ...m, id: m.id + '-dup', values: { ...m.values } }));
+      const dupCounter = state.instanceCounter + src.modifiers.length;
+      copy.modifiers = src.modifiers.map((m, i) => ({
+        ...m,
+        id: `${m.filterId}-${state.instanceCounter + i + 1}`,
+        values: { ...m.values },
+      }));
       const srcIdx    = state.layers.findIndex(l => l.id === action.id);
       const newLayers = [...state.layers];
       newLayers.splice(srcIdx + 1, 0, copy);
-      return { ...state, layers: newLayers, activeLayerId: copy.id };
+      return { ...state, instanceCounter: dupCounter, layers: newLayers, activeLayerId: copy.id };
     }
 
     case 'SET_ACTIVE_LAYER': {
@@ -178,21 +183,37 @@ function _reduce(state, action) {
 
 // ── Pub / sub ─────────────────────────────────────────────
 
+const _history    = [];
+const MAX_HISTORY = 20;
+
 let _state       = _initialState();
 const _listeners = [];
 
 function dispatch(action) {
   const prevState = _state;
+  if (!action._transient) {
+    _history.push(prevState);
+    if (_history.length > MAX_HISTORY) _history.shift();
+  }
   _state = _reduce(_state, action);
+  _listeners.forEach(fn => fn(_state, prevState));
+}
+
+function undo() {
+  if (!_history.length) return;
+  const prevState = _state;
+  _state = _history.pop();
   _listeners.forEach(fn => fn(_state, prevState));
 }
 
 function subscribe(fn) {
   _listeners.push(fn);
+  const idx = _listeners.length - 1;
+  return () => _listeners.splice(idx, 1);
 }
 
 function getState() {
   return _state;
 }
 
-window.Store = { dispatch, subscribe, getState };
+window.Store = { dispatch, subscribe, getState, undo };

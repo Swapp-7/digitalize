@@ -49,7 +49,12 @@ function runLayerStack(layer) {
   ctx.putImageData(layer.imageData, 0, 0);
   for (const item of layer.modifiers) {
     const def = window.FilterDefs?.[item.filterId];
-    if (def) def.apply(layer.offscreenCanvas, ctx, { ...item.values });
+    if (!def) continue;
+    try {
+      def.apply(layer.offscreenCanvas, ctx, { ...item.values });
+    } catch (err) {
+      console.error(`[runLayerStack] Filter "${item.filterId}" (${item.id}) failed:`, err);
+    }
   }
 }
 

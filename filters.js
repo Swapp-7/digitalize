@@ -42,6 +42,16 @@ function hexToRgb(hex) {
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
 }
 
+function luma(r, g, b) { return 0.2126 * r + 0.7152 * g + 0.0722 * b; }
+
+function lcgRand(seed) {
+  let s = seed | 0;
+  return function() {
+    s = (Math.imul(1664525, s) + 1013904223) | 0;
+    return (s >>> 0) / 0xFFFFFFFF;
+  };
+}
+
 // ── Error diffusion kernels ───────────────────────────────
 
 const KERNELS = {
@@ -102,7 +112,7 @@ function runOstromoukhov(canvas, ctx, threshold, dark, light) {
 
   const buf = new Float32Array(W * H);
   for (let i = 0; i < W * H; i++) {
-    buf[i] = 0.2126 * d[i * 4] + 0.7152 * d[i * 4 + 1] + 0.0722 * d[i * 4 + 2];
+    buf[i] = luma(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]);
   }
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
@@ -141,7 +151,7 @@ function runErrorDiffusion(canvas, ctx, threshold, kernelName, dark, light) {
 
   const buf = new Float32Array(W * H);
   for (let i = 0; i < W * H; i++) {
-    buf[i] = 0.2126 * d[i * 4] + 0.7152 * d[i * 4 + 1] + 0.0722 * d[i * 4 + 2];
+    buf[i] = luma(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]);
   }
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
@@ -181,7 +191,7 @@ function runPixelDither(canvas, ctx, threshold, algo, dark, light) {
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const i   = (y * W + x) * 4;
-        const lum = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+        const lum = luma(d[i], d[i + 1], d[i + 2]);
         const col = lum + bias > mat[y % n][x % n] ? light : dark;
         d[i]     = col.r;
         d[i + 1] = col.g;
@@ -190,7 +200,7 @@ function runPixelDither(canvas, ctx, threshold, algo, dark, light) {
     }
   } else if (algo === 'random') {
     for (let i = 0; i < d.length; i += 4) {
-      const lum = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+      const lum = luma(d[i], d[i + 1], d[i + 2]);
       const col = lum + (Math.random() - 0.5) * 128 > threshold ? light : dark;
       d[i]     = col.r;
       d[i + 1] = col.g;
@@ -265,7 +275,7 @@ function runBlockDither(canvas, ctx, threshold, algo, dotSize, dotShape, dark, l
           const px = bx * dotSize + dx, py = by * dotSize + dy;
           if (px < W && py < H) {
             const i = (py * W + px) * 4;
-            sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+            sum += luma(d[i], d[i + 1], d[i + 2]);
             count++;
           }
         }
@@ -420,7 +430,7 @@ window.FilterDefs = {
 
 // ── Glitch effect ─────────────────────────────────────────
 
-function applyGlitch(canvas, ctx, { intensity, vhsSlices }) {
+function applyGlitch(canvas, ctx, { intensity, vhsSlices, seed }) {
   const W = canvas.width, H = canvas.height;
   const src = ctx.getImageData(0, 0, W, H);
   const sd  = src.data;
@@ -434,6 +444,7 @@ function applyGlitch(canvas, ctx, { intensity, vhsSlices }) {
   // ── RGB Split (Chromatic Aberration) ──────────────────────
   // R shifted RIGHT by `intensity` px, B shifted LEFT — clamped, no wrap
   const shift = Math.round(intensity);
+  const rand = lcgRand(seed != null ? seed : 0);
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const dst  = (y * W + x) * 4;
@@ -448,11 +459,11 @@ function applyGlitch(canvas, ctx, { intensity, vhsSlices }) {
 
   // ── VHS Block Shifting ────────────────────────────────────
   if (vhsSlices) {
-    const sliceCount = 3 + Math.floor(Math.random() * 3); // 3–5 slices
+    const sliceCount = 3 + Math.floor(rand() * 3); // 3–5 slices
     for (let s = 0; s < sliceCount; s++) {
-      const sliceH  = 5  + Math.floor(Math.random() * 16); // 5–20px tall
-      const startY  = Math.floor(Math.random() * (H - sliceH));
-      const offsetX = Math.round((Math.random() * 60) - 30); // -30 to +30
+      const sliceH  = 5  + Math.floor(rand() * 16); // 5–20px tall
+      const startY  = Math.floor(rand() * (H - sliceH));
+      const offsetX = Math.round((rand() * 60) - 30); // -30 to +30
 
       for (let y = startY; y < startY + sliceH && y < H; y++) {
         for (let x = 0; x < W; x++) {
@@ -482,6 +493,10 @@ window.FilterDefs.glitch = {
       type: 'toggle', id: 'vhsSlices',
       label: 'VHS SLICES', default: true,
     },
+    {
+      type: 'range', id: 'seed',
+      label: 'SEED', min: 0, max: 65535, step: 1, default: 42,
+    },
   ],
   apply(canvas, ctx, values) {
     applyGlitch(canvas, ctx, values);
@@ -490,13 +505,24 @@ window.FilterDefs.glitch = {
 
 // ── Halftone ──────────────────────────────────────────────
 
+let _halftoneTmp = null;
+let _halftoneTmpW = 0, _halftoneTmpH = 0;
+
+function getHalftoneCanvas(W, H) {
+  if (!_halftoneTmp) _halftoneTmp = document.createElement('canvas');
+  if (_halftoneTmpW !== W || _halftoneTmpH !== H) {
+    _halftoneTmp.width = W; _halftoneTmp.height = H;
+    _halftoneTmpW = W; _halftoneTmpH = H;
+  }
+  return _halftoneTmp;
+}
+
 function applyHalftone(canvas, ctx, { algo, cellSize, angle, invert, darkColor, lightColor }) {
   const W = canvas.width, H = canvas.height;
   const src = ctx.getImageData(0, 0, W, H);
   const sd  = src.data;
 
-  const tmp = document.createElement('canvas');
-  tmp.width = W; tmp.height = H;
+  const tmp = getHalftoneCanvas(W, H);
   const tc  = tmp.getContext('2d');
 
   tc.fillStyle = invert ? darkColor : lightColor;
@@ -522,7 +548,7 @@ function applyHalftone(canvas, ctx, { algo, cellSize, angle, invert, darkColor, 
           const sx = Math.round(px + dx), sy = Math.round(py + dy);
           if (sx >= 0 && sx < W && sy >= 0 && sy < H) {
             const i = (sy * W + sx) * 4;
-            sum += 0.2126 * sd[i] + 0.7152 * sd[i + 1] + 0.0722 * sd[i + 2];
+            sum += luma(sd[i], sd[i + 1], sd[i + 2]);
             count++;
           }
         }
@@ -579,22 +605,55 @@ window.FilterDefs.halftone = {
 
 function boxBlurPass(src, W, H, radius, horizontal) {
   const dst = new Uint8ClampedArray(src.length);
-  const r   = Math.round(radius);
-  for (let y = 0; y < H; y++) {
+  const r     = Math.round(radius);
+  const count = 2 * r + 1;
+
+  if (horizontal) {
+    for (let y = 0; y < H; y++) {
+      const rowOff = y * W;
+      let rr = 0, gg = 0, bb = 0;
+      for (let k = -r; k <= r; k++) {
+        const sx = Math.max(0, Math.min(W - 1, k));
+        const i  = (rowOff + sx) * 4;
+        rr += src[i]; gg += src[i + 1]; bb += src[i + 2];
+      }
+      for (let x = 0; x < W; x++) {
+        const i    = (rowOff + x) * 4;
+        dst[i]     = rr / count;
+        dst[i + 1] = gg / count;
+        dst[i + 2] = bb / count;
+        dst[i + 3] = src[i + 3];
+        const removeX = Math.max(0, x - r);
+        const addX    = Math.min(W - 1, x + r + 1);
+        const ri = (rowOff + removeX) * 4;
+        const ai = (rowOff + addX)    * 4;
+        rr += src[ai] - src[ri];
+        gg += src[ai + 1] - src[ri + 1];
+        bb += src[ai + 2] - src[ri + 2];
+      }
+    }
+  } else {
     for (let x = 0; x < W; x++) {
       let rr = 0, gg = 0, bb = 0;
       for (let k = -r; k <= r; k++) {
-        const sx = horizontal ? Math.max(0, Math.min(W - 1, x + k)) : x;
-        const sy = horizontal ? y : Math.max(0, Math.min(H - 1, y + k));
-        const i  = (sy * W + sx) * 4;
+        const sy = Math.max(0, Math.min(H - 1, k));
+        const i  = (sy * W + x) * 4;
         rr += src[i]; gg += src[i + 1]; bb += src[i + 2];
       }
-      const count = 2 * r + 1;
-      const i = (y * W + x) * 4;
-      dst[i]     = rr / count;
-      dst[i + 1] = gg / count;
-      dst[i + 2] = bb / count;
-      dst[i + 3] = src[i + 3];
+      for (let y = 0; y < H; y++) {
+        const i    = (y * W + x) * 4;
+        dst[i]     = rr / count;
+        dst[i + 1] = gg / count;
+        dst[i + 2] = bb / count;
+        dst[i + 3] = src[i + 3];
+        const removeY = Math.max(0, y - r);
+        const addY    = Math.min(H - 1, y + r + 1);
+        const ri = (removeY * W + x) * 4;
+        const ai = (addY    * W + x) * 4;
+        rr += src[ai] - src[ri];
+        gg += src[ai + 1] - src[ri + 1];
+        bb += src[ai + 2] - src[ri + 2];
+      }
     }
   }
   return dst;
@@ -631,7 +690,7 @@ function applySharpen(data, W, H, amount) {
 function applyGlowFx(data, W, H, intensity, threshold) {
   const bright = new Uint8ClampedArray(data.length);
   for (let i = 0; i < data.length; i += 4) {
-    const lum = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+    const lum = luma(data[i], data[i + 1], data[i + 2]);
     if (lum > threshold) {
       bright[i] = data[i]; bright[i + 1] = data[i + 1]; bright[i + 2] = data[i + 2];
     }
@@ -734,9 +793,12 @@ function applyPalette(canvas, ctx, { mode, darkColor, lightColor, preset, custom
     palette = colors.map(h => { const c = hexToRgb(h); return [c.r, c.g, c.b]; });
   }
 
+  const cache = new Map();
   for (let i = 0; i < d.length; i += 4) {
-    const [nr, ng, nb] = nearestColor(d[i], d[i + 1], d[i + 2], palette);
-    d[i] = nr; d[i + 1] = ng; d[i + 2] = nb;
+    const key = (d[i] >> 4) << 8 | (d[i + 1] >> 4) << 4 | (d[i + 2] >> 4);
+    let entry = cache.get(key);
+    if (!entry) { entry = nearestColor(d[i], d[i + 1], d[i + 2], palette); cache.set(key, entry); }
+    d[i] = entry[0]; d[i + 1] = entry[1]; d[i + 2] = entry[2];
   }
   ctx.putImageData(id, 0, 0);
 }

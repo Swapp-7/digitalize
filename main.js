@@ -31,6 +31,7 @@ function loadImageOntoCanvas(img) {
   scratch.width = w; scratch.height = h;
   scratch.getContext('2d').drawImage(img, 0, 0, w, h);
   const imageData = scratch.getContext('2d').getImageData(0, 0, w, h);
+  scratch.width = 0; // free GPU memory
 
   Store.dispatch({ type: 'LOAD_IMAGE', imageData, name: 'LAYER 1' });
 
@@ -53,9 +54,7 @@ function loadFile(file) {
 // ── Undo ──────────────────────────────────────────────────
 
 function undoToOriginal() {
-  const { activeLayerId } = Store.getState();
-  if (!activeLayerId) return;
-  Store.dispatch({ type: 'CLEAR_MODIFIERS', layerId: activeLayerId });
+  Store.undo();
 }
 
 // ── Export ────────────────────────────────────────────────
