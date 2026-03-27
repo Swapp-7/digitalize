@@ -690,9 +690,12 @@ function applySharpen(data, W, H, amount) {
 function applyGlowFx(data, W, H, intensity, threshold) {
   const bright = new Uint8ClampedArray(data.length);
   for (let i = 0; i < data.length; i += 4) {
-    const lum = luma(data[i], data[i + 1], data[i + 2]);
-    if (lum > threshold) {
-      bright[i] = data[i]; bright[i + 1] = data[i + 1]; bright[i + 2] = data[i + 2];
+    // Only extract bright from opaque pixels — avoids halo from removed background
+    if (data[i + 3] > 0) {
+      const lum = luma(data[i], data[i + 1], data[i + 2]);
+      if (lum > threshold) {
+        bright[i] = data[i]; bright[i + 1] = data[i + 1]; bright[i + 2] = data[i + 2];
+      }
     }
     bright[i + 3] = 255;
   }
@@ -704,9 +707,24 @@ function applyGlowFx(data, W, H, intensity, threshold) {
   }
   const scale = intensity / 15;
   for (let i = 0; i < data.length; i += 4) {
-    data[i]     = Math.min(255, data[i]     + blurred[i]     * scale);
-    data[i + 1] = Math.min(255, data[i + 1] + blurred[i + 1] * scale);
-    data[i + 2] = Math.min(255, data[i + 2] + blurred[i + 2] * scale);
+    const glowR = Math.min(255, blurred[i]     * scale);
+    const glowG = Math.min(255, blurred[i + 1] * scale);
+    const glowB = Math.min(255, blurred[i + 2] * scale);
+    if (data[i + 3] > 0) {
+      // Opaque pixel: add glow to existing RGB
+      data[i]     = Math.min(255, data[i]     + glowR);
+      data[i + 1] = Math.min(255, data[i + 1] + glowG);
+      data[i + 2] = Math.min(255, data[i + 2] + glowB);
+    } else {
+      // Transparent pixel: let glow bleed in, alpha proportional to glow strength
+      const glowAlpha = Math.min(255, Math.max(glowR, glowG, glowB));
+      if (glowAlpha > 0) {
+        data[i]     = glowR;
+        data[i + 1] = glowG;
+        data[i + 2] = glowB;
+        data[i + 3] = glowAlpha;
+      }
+    }
   }
 }
 
@@ -944,5 +962,342 @@ window.FilterDefs.palette = {
 
   apply(canvas, ctx, values) {
     applyPalette(canvas, ctx, values);
+  },
+};
+
+// ── HSL helpers (used by Adjustments) ────────────────────
+
+function _rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  switch (max) {
+    case r:  h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+    case g:  h = ((b - r) / d + 2) / 6;               break;
+    default: h = ((r - g) / d + 4) / 6;
+  }
+  return [h, s, l];
+}
+
+function _hslToRgb(h, s, l) {
+  if (s === 0) { const v = Math.round(l * 255); return [v, v, v]; }
+  const q  = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p  = 2 * l - q;
+  const ch = (t) => {
+    const t1 = ((t % 1) + 1) % 1;
+    if (t1 < 1/6) return p + (q - p) * 6 * t1;
+    if (t1 < 1/2) return q;
+    if (t1 < 2/3) return p + (q - p) * (2/3 - t1) * 6;
+    return p;
+  };
+  return [Math.round(ch(h + 1/3) * 255), Math.round(ch(h) * 255), Math.round(ch(h - 1/3) * 255)];
+}
+
+// ── Adjustments ───────────────────────────────────────────
+
+function applyAdjustments(canvas, ctx, { brightness, contrast, saturation, hue }) {
+  const W = canvas.width, H = canvas.height;
+  const id = ctx.getImageData(0, 0, W, H);
+  const d  = id.data;
+  const br = (brightness || 0) * 2.55;
+  const ct = contrast || 0;
+  const cr = ct !== 0 ? (259 * (ct + 255)) / (255 * (259 - ct)) : 1;
+  const sf = (saturation || 0) / 100;
+  const hr = (hue || 0) / 360;
+
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] === 0) continue;
+    let r = d[i], g = d[i+1], b = d[i+2];
+
+    if (brightness) {
+      r = Math.max(0, Math.min(255, r + br));
+      g = Math.max(0, Math.min(255, g + br));
+      b = Math.max(0, Math.min(255, b + br));
+    }
+    if (ct) {
+      r = Math.max(0, Math.min(255, cr * (r - 128) + 128));
+      g = Math.max(0, Math.min(255, cr * (g - 128) + 128));
+      b = Math.max(0, Math.min(255, cr * (b - 128) + 128));
+    }
+    if (saturation || hue) {
+      const [h2, s, l] = _rgbToHsl(r, g, b);
+      [r, g, b] = _hslToRgb((h2 + hr + 1) % 1, Math.max(0, Math.min(1, s + sf)), l);
+    }
+    d[i] = r; d[i+1] = g; d[i+2] = b;
+  }
+  ctx.putImageData(id, 0, 0);
+}
+
+window.FilterDefs.adjustments = {
+  label: 'Adjustments',
+  controls: [
+    { type: 'range', id: 'brightness', label: 'BRIGHTNESS', min: -100, max: 100, step: 1, default: 0 },
+    { type: 'range', id: 'contrast',   label: 'CONTRAST',   min: -100, max: 100, step: 1, default: 0 },
+    { type: 'range', id: 'saturation', label: 'SATURATION', min: -100, max: 100, step: 1, default: 0 },
+    { type: 'range', id: 'hue',        label: 'HUE ROTATE', min: 0,    max: 360, step: 1, default: 0 },
+  ],
+  apply(canvas, ctx, values) { applyAdjustments(canvas, ctx, values); },
+};
+
+// ── Threshold ─────────────────────────────────────────────
+
+window.FilterDefs.threshold = {
+  label: 'Threshold',
+  controls: [
+    { type: 'range', id: 'level',      label: 'LEVEL',       min: 0, max: 255, step: 1, default: 128 },
+    { type: 'color', id: 'darkColor',  label: 'DARK COLOR',  default: '#000000' },
+    { type: 'color', id: 'lightColor', label: 'LIGHT COLOR', default: '#ffffff' },
+  ],
+  apply(canvas, ctx, { level, darkColor, lightColor }) {
+    const W = canvas.width, H = canvas.height;
+    const id = ctx.getImageData(0, 0, W, H);
+    const d  = id.data;
+    const dk = hexToRgb(darkColor  || '#000000');
+    const lt = hexToRgb(lightColor || '#ffffff');
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] === 0) continue;
+      const col = luma(d[i], d[i+1], d[i+2]) >= level ? lt : dk;
+      d[i] = col.r; d[i+1] = col.g; d[i+2] = col.b;
+    }
+    ctx.putImageData(id, 0, 0);
+  },
+};
+
+// ── Posterize ─────────────────────────────────────────────
+
+window.FilterDefs.posterize = {
+  label: 'Posterize',
+  controls: [
+    { type: 'range', id: 'levels', label: 'LEVELS', min: 2, max: 16, step: 1, default: 4 },
+  ],
+  apply(canvas, ctx, { levels }) {
+    const W = canvas.width, H = canvas.height;
+    const id = ctx.getImageData(0, 0, W, H);
+    const d  = id.data;
+    const lvl  = Math.max(2, levels || 4);
+    const step = 255 / (lvl - 1);
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] === 0) continue;
+      d[i]   = Math.round(Math.round(d[i]   / step) * step);
+      d[i+1] = Math.round(Math.round(d[i+1] / step) * step);
+      d[i+2] = Math.round(Math.round(d[i+2] / step) * step);
+    }
+    ctx.putImageData(id, 0, 0);
+  },
+};
+
+// ── Duotone ───────────────────────────────────────────────
+
+window.FilterDefs.duotone = {
+  label: 'Duotone',
+  controls: [
+    { type: 'color', id: 'shadowColor',    label: 'SHADOWS',    default: '#1a0533' },
+    { type: 'color', id: 'highlightColor', label: 'HIGHLIGHTS', default: '#ff6ec7' },
+    { type: 'range', id: 'midpoint',       label: 'MIDPOINT',   min: 0, max: 255, step: 1, default: 128 },
+  ],
+  apply(canvas, ctx, { shadowColor, highlightColor, midpoint }) {
+    const W = canvas.width, H = canvas.height;
+    const id = ctx.getImageData(0, 0, W, H);
+    const d  = id.data;
+    const sh = hexToRgb(shadowColor    || '#1a0533');
+    const hi = hexToRgb(highlightColor || '#ff6ec7');
+    const mp = (midpoint || 128) / 255;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] === 0) continue;
+      const raw = luma(d[i], d[i+1], d[i+2]) / 255;
+      const t   = raw < mp
+        ? (mp > 0 ? (raw / mp) * 0.5 : 0)
+        : (mp < 1 ? 0.5 + ((raw - mp) / (1 - mp)) * 0.5 : 1);
+      d[i]   = Math.round(sh.r + t * (hi.r - sh.r));
+      d[i+1] = Math.round(sh.g + t * (hi.g - sh.g));
+      d[i+2] = Math.round(sh.b + t * (hi.b - sh.b));
+    }
+    ctx.putImageData(id, 0, 0);
+  },
+};
+
+// ── Remove Background ─────────────────────────────────────
+// Flood-fills from the 4 corners and makes matching pixels transparent.
+
+function applyRemoveBg(canvas, ctx, { autoDetect, bgColor, tolerance, softEdge }) {
+  const W = canvas.width, H = canvas.height;
+  const id = ctx.getImageData(0, 0, W, H);
+  const d  = id.data;
+
+  // Determine target BG color
+  let tr, tg, tb;
+  if (autoDetect !== false) {
+    // Average of the 4 corner pixels
+    const c0 = 0, c1 = (W - 1) * 4, c2 = (H - 1) * W * 4, c3 = ((H - 1) * W + W - 1) * 4;
+    tr = Math.round((d[c0] + d[c1] + d[c2] + d[c3]) / 4);
+    tg = Math.round((d[c0+1] + d[c1+1] + d[c2+1] + d[c3+1]) / 4);
+    tb = Math.round((d[c0+2] + d[c1+2] + d[c2+2] + d[c3+2]) / 4);
+  } else {
+    const c = hexToRgb(bgColor);
+    tr = c.r; tg = c.g; tb = c.b;
+  }
+
+  const colorDist = (r, g, b) => Math.sqrt((r - tr) ** 2 + (g - tg) ** 2 + (b - tb) ** 2);
+
+  // BFS flood fill from 4 corners
+  const visited = new Uint8Array(W * H);
+  const queue   = new Int32Array(W * H);
+  let head = 0, tail = 0;
+
+  for (const idx of [0, W - 1, (H - 1) * W, (H - 1) * W + W - 1]) {
+    const i = idx * 4;
+    if (d[i + 3] > 0 && colorDist(d[i], d[i + 1], d[i + 2]) <= tolerance && !visited[idx]) {
+      visited[idx] = 1;
+      queue[tail++] = idx;
+    }
+  }
+
+  while (head < tail) {
+    const idx = queue[head++];
+    d[idx * 4 + 3] = 0;
+    const x = idx % W, y = (idx / W) | 0;
+    const check = (n) => {
+      if (!visited[n] && colorDist(d[n * 4], d[n * 4 + 1], d[n * 4 + 2]) <= tolerance) {
+        visited[n] = 1; queue[tail++] = n;
+      }
+    };
+    if (x > 0)   check(idx - 1);
+    if (x < W-1) check(idx + 1);
+    if (y > 0)   check(idx - W);
+    if (y < H-1) check(idx + W);
+  }
+
+  // Soft edge: fade opaque pixels that are close to the BG color but outside tolerance
+  if (softEdge) {
+    const softTol = tolerance * 1.5;
+    for (let i = 0; i < W * H; i++) {
+      if (d[i * 4 + 3] > 0) {
+        const dist = colorDist(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]);
+        if (dist > tolerance && dist < softTol) {
+          const t = (dist - tolerance) / (softTol - tolerance);
+          d[i * 4 + 3] = Math.round(t * 255);
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(id, 0, 0);
+}
+
+window.FilterDefs.removebg = {
+  label: 'Remove BG',
+  controls: [
+    { type: 'toggle', id: 'autoDetect', label: 'AUTO-DETECT', default: true  },
+    { type: 'color',  id: 'bgColor',    label: 'BG COLOR',    default: '#ffffff' },
+    { type: 'range',  id: 'tolerance',  label: 'TOLERANCE',   min: 0, max: 150, step: 1, default: 30 },
+    { type: 'toggle', id: 'softEdge',   label: 'SOFT EDGE',   default: false },
+  ],
+  apply(canvas, ctx, values) {
+    applyRemoveBg(canvas, ctx, values);
+  },
+};
+
+// ── ASCII Art ──────────────────────────────────────────────
+
+const ASCII_CHARSETS = {
+  classic: ' .:-=+*#%@',
+  dense:   ' `.^,:;Il!i><~+_-?][}{1|tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$',
+  blocks:  ' ░▒▓█',
+  binary:  ' 10',
+};
+
+function applyAsciiArt(canvas, ctx, { cellSize, charset, colored, invert, bgColor, fgColor }) {
+  const W = canvas.width, H = canvas.height;
+  const src = ctx.getImageData(0, 0, W, H);
+  const sd  = src.data;
+
+  const chars    = ASCII_CHARSETS[charset] || ASCII_CHARSETS.classic;
+  const fontSize = Math.max(4, cellSize | 0);
+
+  // Measure actual character width for this font/size
+  ctx.font = `${fontSize}px monospace`;
+  const charW = ctx.measureText('M').width;
+
+  const cols = Math.ceil(W / charW);
+  const rows = Math.ceil(H / fontSize);
+
+  // Sample one block per character cell
+  const blocks = new Array(rows * cols);
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const x0 = Math.round(col * charW);
+      const y0 = row * fontSize;
+      const x1 = Math.min(W, Math.round((col + 1) * charW));
+      const y1 = Math.min(H, y0 + fontSize);
+      let rSum = 0, gSum = 0, bSum = 0, count = 0;
+      for (let py = y0; py < y1; py++) {
+        for (let px = x0; px < x1; px++) {
+          const i = (py * W + px) * 4;
+          rSum += sd[i]; gSum += sd[i + 1]; bSum += sd[i + 2];
+          count++;
+        }
+      }
+      const r = count ? rSum / count : 0;
+      const g = count ? gSum / count : 0;
+      const b = count ? bSum / count : 0;
+      blocks[row * cols + col] = { r, g, b, lum: luma(r, g, b) };
+    }
+  }
+
+  // Fill background
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, 0, W, H);
+
+  // Draw characters
+  ctx.font = `${fontSize}px monospace`;
+  ctx.textBaseline = 'top';
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const { r, g, b, lum } = blocks[row * cols + col];
+      // chars[0] = lightest (space), chars[last] = darkest
+      // invert=false → dark image pixel → dense char (high idx)
+      const t   = lum / 255;
+      const idx = invert
+        ? Math.min(chars.length - 1, Math.floor(t * chars.length))
+        : Math.min(chars.length - 1, Math.floor((1 - t) * chars.length));
+      const ch = chars[idx];
+      if (ch === ' ') continue;
+      ctx.fillStyle = colored
+        ? `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`
+        : fgColor;
+      ctx.fillText(ch, Math.round(col * charW), row * fontSize);
+    }
+  }
+}
+
+window.FilterDefs.ascii = {
+  label: 'ASCII Art',
+  controls: [
+    {
+      type: 'range', id: 'cellSize',
+      label: 'CELL SIZE', min: 4, max: 24, step: 1, default: 10,
+    },
+    {
+      type: 'select', id: 'charset', label: 'CHARSET',
+      default: 'classic',
+      options: [
+        { value: 'classic', label: 'Classic' },
+        { value: 'dense',   label: 'Dense' },
+        { value: 'blocks',  label: 'Blocks' },
+        { value: 'binary',  label: 'Binary' },
+      ],
+    },
+    { type: 'toggle', id: 'colored', label: 'COLORED',    default: false },
+    { type: 'toggle', id: 'invert',  label: 'INVERT',     default: false },
+    { type: 'color',  id: 'bgColor', label: 'BG COLOR',   default: '#FDF7EE' },
+    { type: 'color',  id: 'fgColor', label: 'TEXT COLOR', default: '#2A1500' },
+  ],
+  apply(canvas, ctx, values) {
+    applyAsciiArt(canvas, ctx, values);
   },
 };
